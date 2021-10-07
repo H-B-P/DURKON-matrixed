@@ -63,20 +63,45 @@ def produce_total_relevances_dict(contReleDict, catReleDict):
  print(op)
  return op
 
-def train_model(inputDf, target, nrounds, lrs, startingModels, pumplr=0, grad=calculus.Gamma_grad):
+def produce_wReleDict(releDict, w):
+ wReleDict = {}
+ for col in releDict:
+  wReleDict[col]=w*releDict[col]
+ return wReleDict
+
+def train_model(inputDf, target, nrounds, lrs, startingModels, weights=None, grad=calculus.Poisson_grad):
  
  models = copy.deepcopy(startingModels)
+ 
+ if weights==None:
+  weights = np.ones(len(inputDf))
+ w = np.array(np.transpose(np.matrix(weights)))
+ sw = sum(weights)
  
  contReleDictList=[]
  catReleDictList=[]
  totReleDictList=[]
  
+ contWReleDictList=[]
+ catWReleDictList=[]
+ totWReleDictList=[]
+ 
  print("initial relevances setup")
  
  for model in models:
-  contReleDictList.append(produce_cont_relevances_dict(inputDf,model))
-  catReleDictList.append(produce_cat_relevances_dict(inputDf,model))
-  totReleDictList.append(produce_total_relevances_dict(contReleDictList[-1], catReleDictList[-1]))
+  cord = produce_cont_relevances_dict(inputDf,model)
+  card = produce_cat_relevances_dict(inputDf,model)
+  
+  contReleDictList.append(cord)
+  catReleDictList.append(card)
+  totReleDictList.append(produce_total_relevances_dict(cord, card))
+  
+  cowrd = produce_wReleDict(cord, w)
+  cawrd = produce_wReleDict(card, w)
+  
+  contWReleDictList.append(cowrd)
+  catWReleDictList.append(cawrd)
+  totWReleDictList.append(produce_total_relevances_dict(cowrd, cawrd))
  
  for i in range(nrounds):
   
@@ -117,16 +142,12 @@ def train_model(inputDf, target, nrounds, lrs, startingModels, pumplr=0, grad=ca
     
     peoc = pred/effectOfCol #d(pred)/d(featpred)
     
-    finalGradients = np.matmul(np.array(peoc*gradient),contReleDictList[m][col]) #d(Loss)/d(pt) = d(Loss)/d(pred) * d(pred)/d(featpred) * d(featpred)/d(pt)
+    finalGradients = np.matmul(np.array(peoc*gradient),contWReleDictList[m][col]) #d(Loss)/d(pt) = d(Loss)/d(pred) * d(pred)/d(featpred) * d(featpred)/d(pt)
     
     for k in range(len(finalGradients)):
-     totRele = totReleDictList[m]["conts"][col][k]
+     totRele = totWReleDictList[m]["conts"][col][k]
      if totRele>0:
-      models[m]["conts"][col][k][1] -= finalGradients[k]*lrs[m]/totRele #and not /len(inputDf)
-      if pumplr>0:
-       for n in range(len(models)):
-        models[m]["conts"][col][k][1] -= finalGradients[k]*pumplr/totRele #add some further learning . . .
-        models[n]["conts"][col][k][1] += finalGradients[k]*pumplr/totRele #. . . stolen from other models (which will steal from you in turn)
+      models[m]["conts"][col][k][1] -= finalGradients[k]*lrs[m]/totRele #and not /sw
        
       
    print("adjust cats")
@@ -137,32 +158,31 @@ def train_model(inputDf, target, nrounds, lrs, startingModels, pumplr=0, grad=ca
     
     peoc = pred/effectOfCol #d(pred)/d(featpred)
     
-    finalGradients = np.matmul(np.array(peoc*gradient),catReleDictList[m][col]) #d(Loss)/d(pt) = d(Loss)/d(pred) * d(pred)/d(featpred) * d(featpred)/d(pt)
+    finalGradients = np.matmul(np.array(peoc*gradient),catWReleDictList[m][col]) #d(Loss)/d(pt) = d(Loss)/d(pred) * d(pred)/d(featpred) * d(featpred)/d(pt)
     
     skeys = apply_model.get_sorted_keys(model, col)
     
     #all the uniques . . .
     for k in range(len(skeys)):
-     totRele = totReleDictList[m]["cats"][col][k]
+     totRele = totWReleDictList[m]["cats"][col][k]
      if totRele>0:
-      models[m]["cats"][col]["uniques"][skeys[k]] -= finalGradients[k]*lrs[m]/totRele #and not /len(inputDf)
-      if pumplr>0:
-       for n in range(len(models)):
-        models[m]["cats"][col]["uniques"][skeys[k]] -= finalGradients[k]*pumplr/totRele #add some further learning . . .
-        models[n]["cats"][col]["uniques"][skeys[k]] += finalGradients[k]*pumplr/totRele #. . . stolen from other models (which will steal from you in turn)
+      models[m]["cats"][col]["uniques"][skeys[k]] -= finalGradients[k]*lrs[m]/totRele #and not /sw
     
     # . . . and "OTHER"
-    totRele = totReleDictList[m]["cats"][col][-1]
+    totRele = totWReleDictList[m]["cats"][col][-1]
     if totRele>0:
-     models[m]["cats"][col]["OTHER"] -= finalGradients[-1]*lrs[m]/totRele #and not /len(inputDf)
-     if pumplr>0:
-      for n in range(len(models)):
-       models[m]["cats"][col]["OTHER"] -= finalGradients[-1]*pumplr/totRele #add some further learning . . .
-       models[n]["cats"][col]["OTHER"] -= finalGradients[-1]*pumplr/totRele #. . . stolen from other models (which will steal from you in turn)
- 
+     models[m]["cats"][col]["OTHER"] -= finalGradients[-1]*lrs[m]/totRele #and not /sw
  return models
 
 if __name__ == '__main__':
+ df = pd.DataFrame({"x":[1,2,3,4,5,6,7,8,9],"y":[1,2,3,4,5,6,7,8,9]})
+ models = [{"BASE_VALUE":1.0,"conts":{"x":[[1,5],[5,5],[9,5]]}, "cats":[]}]
+ newModels = train_model(df, "y",100, [2], models,weights=[1,2,3,4,5,6,7,8,9])
+ for newModel in newModels:
+  apply_model.explain(newModel)
+
+
+if False:
  df = pd.DataFrame({"x":[1,2,3,4,5,6,7,8,9],"y":[2,2,2,2,2,2,2,2,2]})
  models = [{"BASE_VALUE":1.0,"conts":{"x":[[2,1],[5,1],[8,1]]}, "cats":[]}]
  print(produce_cont_relevances(df, models[0], "x"))
